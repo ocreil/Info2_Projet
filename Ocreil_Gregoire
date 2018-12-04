@@ -1,0 +1,358 @@
+local
+   % See project statement for API details.
+   [Project] = {Link ['Project2018.ozf']}
+   Time = {Link ['x-oz://boot/Time']}.1.getReferenceTime
+   
+
+   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+   % Translate a note to the extended notation.
+   fun {NoteToExtended Note}
+      case Note
+      of Name#Octave then
+         note(name:Name octave:Octave sharp:true duration:1.0 instrument:none)
+      [] Atom then
+         case {AtomToString Atom}
+         of [_] then
+            note(name:Atom octave:4 sharp:false duration:1.0 instrument:none)
+         [] [N O] then
+            note(name:{StringToAtom [N]}
+                 octave:{StringToInt [O]}
+                 sharp:false
+                 duration:1.0
+                 instrument: none)
+         end
+      end
+   end
+   % Translate a chord to the extended notation dans le premier appel (donc tout ceux qu'on fait directement dans le code, C==nil 
+   fun{ChordToExtended Chord C}
+      case Chord of nil then C
+      [] H|T then
+	 case H of note(name:N octave:O sharp:B duration:D instrument:I) then
+	    ExtendedNote={NoteToExtended H}
+	    local A in
+	       A = {Append C ExtendedNote}
+	       {ChordToExtended T A}
+	    end
+	 end
+      end
+   end
+
+   fun {ItemToSound PartitionItem}
+      case PartitionItem of Atom then %on a un atome donc une note non etendue
+	 {NoteToExtended PartitionItem}
+      [] Name#Octave then % on a un tuple donc une note non etendue 
+	 {NoteToExtended PartitionItem}
+      [] note(name:N octave:O sharp:B duration:D instrument:I)  then %on a un record donc une extended note 
+	 PartitionItem
+      [] H|T then % on est donc en présence d'une liste donc d'un chord ou d'un extended chord 
+	 case H of Atom then % la on a un chord (ou le atom est une des note ou un silence de la chord)
+	    ExtendedChord = {ChordToExtended PartitionItem}% on le transforme donc en extended
+	    ExtendedChord
+	 []Name#Octave then % cette note de la chord est un diese
+	    ExtendedChord = {ChordToExtended PartitionItem}% on le transforme en extended
+	    ExtendedChord
+	 [] note (name:Atom octave:Atom sharp:Atom duration:Atom instrument:Atom) orelse {IsSilence H} then %car si le premier est une ext note(ousilence) alors on a une ext chord
+	    PartitionItem
+	 end
+      end
+   end
+
+	 
+   fun {IsTransformation PartitionItem}
+      case PartitionItem of nil then false
+      [] duration(seconds:A B) then true
+      [] stretch(factor:A B) then true
+      [] drone(note:A amount:B) then true
+      [] transpose(semitones:A B) then true
+      else false 
+      end
+   end
+
+   %apres avoir verifie que la partition item est bien une transfo, cette fonction est appellee et elle retourne la partition en argument de la transfo transformee
+   fun {ApplyTransformation Transformation} 
+      %Fonctions qui  appliquent la transformation donc une fonction pour chaque transfo
+
+      %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+      %applique duration 
+      fun {ApplyDuration Transformation}
+         %retourne la note dont la duree a ete modifiee (en verite c est une nouvelle note)
+	 fun {TransformExtendedNoteDuration ExtendedNote}
+	    case ExtendedNote of silence(duration:D)  then
+	       local A in
+		  A =  silence(Transformation.seconds}
+                  % cree une nouvelle extended note ou duration de la nouvelle est Transfomation.seconds
+		  A
+	       end
+	    else
+	       local A in
+		  A = note(name:ExtendedNote.name octave:ExtendedNote.octave sharp:ExtendedNote.sharp duration:Transformation.duration instrument:ExtendedNote.instrument)
+                  %cree une nouvelle extended  note ou la duration de la nouvelle est Transformation.seconds
+		  A
+	       end
+	    end
+	 end
+	 %retourne la chord dont la duree de chaque note a ete modifiee (en verite c est une nouvelle chord)
+	 fun {TransformExtendedChordDuration ExtendedChord Acc}
+	    case ExtendedChord of nil then Acc
+	    [] H|T then local A B in
+			   A = {TransformExtendedNoteDuration H}
+			   B={Append Acc A}
+			   {TransformExtendedChordDuration T B}
+			end
+	    end
+	 end
+	 %applique la transfo mais on a besoin d un accumulateur
+	 fun {Duration FlatPartition Acc}
+	    case FlatPartition
+	    of nil then Acc
+	    [] H|T then case H of note(name:N octave:O sharp:B duration:D Instrument:I)  then local A B in
+												 A = {TransformExtendedNoteDuration H}
+												 B = {Append Acc A}
+												 {Duration T B}
+											      end
+			else local A B in
+				A = {TransformExtendedChordDuration H nil}
+				B = {Append Acc A}
+				{Duration T B}
+			     end
+			end
+	    end
+	 end
+
+	 %corps de la fonction ApplyDuration
+         %change la <partition> en un <flat partition> avant d appliquer la transfo
+	 local FlatPartition B in
+	    FlatPartition  = {PartitionToTimedList Transformation.1} % c'est bien la partition qui est dans le record de la transfo
+	    B = {Duration FlatParttion nil}
+	    B
+	 end
+      end
+
+      %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+      %fonction qui applique stretch
+      fun {ApplyStrech Transformation}
+	 %transforme une extendednote
+	 fun {TransformExtendedNoteStrech ExtendedNote}
+	    case ExtendedNote of silence(duration:D) then
+	       local A in
+		  A = silence(duration: ExtendedNote.duration*Transformation.factor)
+                  % cree une nouvelle extended note ou duration de la nouvelle est Transfomation.factor*ExtendedNote.duration
+		  A
+	       end
+	    else
+	       local A in
+		  A = note(name:ExtendedNote.name octave:ExtendedNote.octave sharp:ExtendedNote.sharp duration:ExtendedNote.duration*Transformation.factor instrument:ExtendedNote.instrument)
+                  %cree une nouvelle extended  note ou la duration de la nouvelle est Transformation.factor*ExetendedNote.duration
+		  A
+	       end
+	    end
+	 end
+	 %transforme une extended chord
+	 fun {TransformExtendedChordStrech ExtendedChord Acc}
+	    case ExtendedChord of nil then Acc
+	    []H|T then local A B in
+			  A ={TransformExtendedNoteStrech H}
+			  B = {Append Acc A}
+			  {TransformExtendedChordStrech T B}
+		       end
+	    end
+	 end
+	 %applique la transfo mais avec un accumulateur
+	 fun {Stretch FlatPartition Acc}
+	    case FlatPartition of nil then Acc
+	    [] H|T then
+	       case H of note(name:N octave:O sharp:B duration:D instrument:I) then local A B in
+										       A = {TransformExtendedNoteStrech H}
+										       B = {Append Acc A}
+										       {ApplyStrech T B}
+										    end
+	       else local A B in
+		       A = {TransformExtendedChordStrech H}
+		       B = {Append Acc A}
+		       {ApplyStrech T B}
+		    end
+	       end
+	    end
+	 end
+
+	 % corps de la fonction ApplyStretch
+	 % change la <partition> en un <flat partition>
+	 local FlatPartition A in
+	    FlatPartition  = {PartitionToTimedList Transformation.1} % Transformation.1 est bien la partition dans la transfo
+	    A = {Stretch FlatPartition nil}
+	    A
+	 end
+      end
+
+      %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+      %fonction qui applique drone
+      fun {ApplyDrone Transformation}
+	 %tres simple fonction recursive avec <amount> comme accumulateur pour le nombre de recursions et avec bourdon comme resultat final (communicating vases)
+	 fun {ApplyWithBourdon Transformation Bourdon}
+	    if Transformation.1 == 0 then Bourdon
+	    else local A in
+		    A =  {Append Bourdon Transformation.note}
+		    {ApplyWithBourdon drone(note:Transformation.note amount:Transformation.amount-1) A}
+		 end
+	    end
+	 end
+	 {ApplyWithBourdon Transformation nil}
+      end
+
+      %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+      %fonction qui applique transpose
+      fun {ApplyTranspose Transformation}
+	 %fonction qui transpose une note d un certain amount de fois
+	 fun {TransformExtendedNoteTranspose ExtendedNote Amount}
+	    if Amount==0 then ExtendedNote
+	    else
+	       case ExtendedNote of silence(duration:D) then ExtendedNote
+	       else %ici on va devoir cree une nouvelle note changee de un semi-ton soit ver le haut soit vers le base (or 12 notes => 24 elseif => piste a ameliorer)
+		  local NewNote Name Sharp Octave in
+		     NewNote = note(name:Name octave:Octave sharp:Sharp duration:ExtendedNote.duration instrument:ExtendedNote.instrument)
+		     if Amount > 0 then
+			if ExtendedNote.name == 'c'  andthen ExtendedNote.sharp == false then Name = 'c' Sharp = true Octave= ExtendedNote.octave 
+			elseif ExtendedNote.name =='c' then Name = 'd' Sharp = false Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='d' andthen ExtendedNote.sharp == false then Name = 'd' Sharp = true  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='d' then  Name = 'e' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='e' then Name = 'f' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='f' andthen ExtendedNote.sharp == false then Name = 'f' Sharp = true  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='f' then  Name = 'g' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='g' andthen ExtendedNote.sharp == false then Name = 'g' Sharp = true  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='g' then Name = 'a' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='a' andthen ExtendedNote.sharp == false then Name = 'a' Sharp = true  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='a' then Name = 'b' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='b' then Name = 'c' Sharp = false  Octave= ExtendedNote.octave+1
+			end
+			{TransformExtendedNoteTranspose NewNote Amount-1}
+		     elseif Amount < 0 then
+			if ExtendedNote.name == 'c'  andthen ExtendedNote.sharp == false then Name = 'b' Sharp=false Octave= ExtendedNote.octave-1
+			elseif ExtendedNote.name =='c' then Name = 'c' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='d' andthen ExtendedNote.sharp == false then Name = 'c' Sharp = true  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='d' then Name = 'd' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='e' then Name = 'd' Sharp = true  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='f' andthen ExtendedNote.sharp == false then Name = 'e' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='f' then  Name = 'f' Sharp = false  Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='g' andthen ExtendedNote.sharp == false then Name = 'f' Sharp = true Octave= ExtendedNote.octave 
+			elseif ExtendedNote.name =='g' then Name = 'g' Sharp = false Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='a' andthen ExtendedNote.sharp == false then Name = 'g' Sharp = true Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='a' then Name = 'a' Sharp = false Octave= ExtendedNote.octave
+			elseif ExtendedNote.name =='b' then Name = 'a' Sharp = true Octave= ExtendedNote.octave
+			end
+			{TransformExtendedNoteTranspose NewNote Amount+1}
+		     end
+		  end %ferme le local
+	       end %ferme le case
+	    end %ferme le if
+	 end %ferme la fonction TransformExtendedNoteTranspose
+
+	 %fonction qui transpose une chord d un certain amount
+	 fun {TransformExtendedChordTranspose ExtendedChord Acc}
+	    case ExtendedChord of H|T then
+	       local A B in
+		  A = {TransformExtendedNoteDuration H Amount}
+		  B = {Append Acc A}
+		  {TransformExtendedChordDuration T B}
+	       end
+	    [] nil then Acc
+	    end
+	 end
+
+         %fonction qui applique transpose avec accumulateur
+	 fun {Transpose FlatPartition Acc}
+	    case FlatPartition of nil then
+	       Acc
+	    [] H|T then
+	       case H of note(name:N octave:O sharp:B duration:D instrument:I) then
+		  local A B in
+		     A = {TransformExtendedNoteTranspose H}
+		     B = {Append Acc A}
+		     {Transpose T B}
+		  end
+	       else 
+		  local A B in
+		     A = {TransformExtendedChordTranspose H}
+		     B = {Append Acc A}
+		     {Transpose T B}
+		  end
+	       end
+	    end
+	 end
+
+	 % corps de la fonction ApplyTranspose
+         % change la <partition> en un <flat partition>
+	 local FlatPartition Trans in
+	    FlatPartition = {PartitionToTimedList Transformation}
+	    Trans = {Transpose FlatPartition nil}
+	    Trans
+	 end
+      end
+      %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+      % corps de la fonction ApplyTransformation
+      % si on appelle la fonction ApplyTransformation, on sait que notre partition item est une transfo, reste a voir quelle transfo on a et donc laquelle des 4 fonctions on va appliquer
+      local Trans in
+	 case Transformation of nil then nil
+	 [] duration(seconds:A B) then Trans = {ApplyDuration Transformation} Trans
+	 [] stretch(factor:A B) then Trans = {ApplyStretch Transformation} Trans
+	 [] drone(note:A amount:B) then Trans = {ApplyDrone Transformation} Trans
+	 [] transpose(semitones:A B) then Trans = {ApplyTranspose Transformation} Trans
+	 end
+      end
+   end
+      
+
+   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+   fun {PartitionToTimedList Partition}
+      fun {P2TWithAcc Partition FlatPartition}
+	 local B in
+	    B ={IsTransformation H}
+	    case Partition
+	    of nil then FlatPartition
+	    [] H|T then if B==true then
+			  {ApplyTransformation H}
+			  {P2TWithAcc T H}
+			else {ItemToSound H} {P2TWithAcc T H}
+			end
+	    end
+	 end
+      end
+      local FlatPartition in
+         FlatPartition = {P2TWithAcc Partition nil}
+	 FlatPartition
+      end
+   end
+
+   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+   fun {Mix P2T Music}
+      % TODO
+      {Project.readFile 'wave/animaux/cow.wav'}
+   end
+
+   %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+   Music = {Project.load 'joy.dj.oz'}
+   Start
+
+   % Uncomment next line to insert your tests.
+   % \insert 'tests.oz'
+   % !!! Remove this before submitting.
+in
+   Start = {Time}
+
+   % Uncomment next line to run your tests.
+   % {Test Mix PartitionToTimedList}
+
+   % Add variables to this list to avoid "local variable used only once"
+   % warnings.
+   {ForAll [NoteToExtended Music] Wait}
+   
+   % Calls your code, prints the result and outputs the result to `out.wav`.
+   % You don't need to modify this.
+   {Browse {Project.run Mix PartitionToTimedList Music 'out.wav'}}
+   
+   % Shows the total time to run your code.
+   {Browse {IntToFloat {Time}-Start} / 1000.0}
+end
